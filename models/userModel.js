@@ -22,6 +22,9 @@ const userSchema = new mongoose.Schema(
     },
     otp: { type: String },
     otp_expiry_time: { type: Date },
+    socket_id: {
+      type: String,
+    },
     passwordChangedAt: {
       type: Date,
     },
@@ -35,7 +38,8 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
-    status: { type: String, enum: ["Online,Offline"] },
+    status: { type: String, enum: ["Online", "Offline"] },
+    friends: [{ type: mongoose.Schema.ObjectId, ref: "User" }],
   },
   { timestamps: true }
 );
@@ -118,6 +122,8 @@ const signupValidation = async (data) => {
     passwordChangedAt: Joi.date(),
     passwordResetExpires: Joi.date(),
     otp_expiry_time: Joi.date(),
+    socket_id: Joi.string(),
+    friends: Joi.array().items(Joi.string()),
   });
   return await schema.validateAsync(data);
 };

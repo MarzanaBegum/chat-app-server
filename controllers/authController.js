@@ -50,13 +50,13 @@ const sendOtp = async (req, res, next) => {
     const otp_expiry_time = Date.now() + 10 * 60 * 1000; //10 minutes after sent otp
 
     const user = await UserModel.findByIdAndUpdate(
-      { _id: user_id },
+      user_id,
       { otp_expiry_time },
       { new: true, validateModifiedOnly: true }
     );
     user.otp = new_otp.toString();
     await user.save({ new: true, validateModifiedOnly: true });
-
+    console.log("otp", new_otp.toString());
     //send mail
     // sendEmail({
     //   from: `${process.env.SENDER_EMAIL}`,
@@ -103,7 +103,6 @@ const verifyOtp = async (req, res, next) => {
 
 const login = async (req, res, next) => {
   try {
-    const { email, password } = req.body;
     const { value, error } = await loginValidation(req.body);
     if (error)
       return res.status(400).send({ message: error.details[0].message });
@@ -112,30 +111,42 @@ const login = async (req, res, next) => {
     if (!user) {
       throw CreateError("Invalid credentials", 401);
     }
-    const isPasswordValid = await user.comparePassword(req.body.password, user.password);
+    const isPasswordValid = await user.comparePassword(
+      req.body.password,
+      user.password
+    );
     if (!isPasswordValid) throw CreateError("Invalid credentials", 401);
 
     const token = generateToken(user._id);
-    res.status(200).send({ token, message: "Logged in successfully" });
+    res
+      .status(200)
+      .send({ token, userId: user._id, message: "Logged in successfully" });
   } catch (error) {
     res.status(error.statusCode || 500).send({ message: error.message });
   }
 };
 
 const forgotPassword = async (req, res, next) => {
-  const { email } = req.body.email;
+  const { email } = req.body;
 
   const user = await UserModel.findOne({ email });
   if (!user)
     throw CreateError("There is no user with given email address", 404);
 
   try {
-    const resetToken = user.createResetPasswordToken();
+    const resetToken = await user.createResetPasswordToken();
     await user.save({ validateBeforeSave: false });
 
     const resetPasswordUrl = `${process.env.CLIENT_URL}/auth/new-password?token=${resetToken}`;
     //send reset password email
-
+    // mailService.sendEmail({
+    //   from: "shreyanshshah242@gmail.com",
+    //   to: user.email,
+    //   subject: "Reset Password",
+    //   html: resetPassword(user.firstName, resetURL),
+    //   attachments: [],
+    // });
+    console.log(resetPasswordUrl);
     res.status(200).send({ message: "An email has been sent to your account" });
   } catch (error) {
     user.passwordResetToken = undefined;
@@ -149,11 +160,8 @@ const resetPassword = async (req, res) => {
   try {
     const { password, token } = req.body;
 
-    const bytes = CryptoJS.AES.decrypt(token, process.env.CRYPTO_SALT);
-    // const originalToken = bytes.toString(CryptoJS.enc.Utf8);
-    console.log(token, bytes);
     const user = await UserModel.findOne({
-      passwordResetToken: bytes,
+      passwordResetToken: token,
       passwordResetExpires: { $gt: Date.now() },
     });
 
@@ -183,38 +191,41 @@ const resetPassword = async (req, res) => {
 };
 
 const protect = async (req, res, next) => {
-  let token;
-  if (
-    req.headers.authorization &&
-    req.headers.authorization.startsWith("Bearer")
-  ) {
-    token = req.headers.authorization.split(" ")[1];
-  } else if (req.cookies.jwt) {
-    token = req.cookies.jwt;
+  try {
+    let token;
+    if (
+      req.headers.authorization &&
+      req.headers.authorization.startsWith("Bearer")
+    ) {
+      token = req.headers.authorization.split(" ")[1];
+    } else if (req.cookies.jwt) {
+      token = req.cookies.jwt;
+    }
+    if (!token) {
+      res.status(401).send({ message: "You are not logged in.Please log in" });
+    }
+
+    const decoded = await promisify(jwt.verify)(token, process.env.JWT_SECRET);
+
+    const this_user = await UserModel.findById(decoded.userId);
+    if (!this_user)
+      throw CreateError(
+        "The user belonging to this token does no longer exists.",
+        401
+      );
+
+    if (this_user.changedPasswordAfter(decoded.iat)) {
+      return res.status(401).json({
+        message: "User recently changed password! Please log in again.",
+      });
+    }
+
+    // GRANT ACCESS TO PROTECTED ROUTE
+    req.user = this_user;
+    next();
+  } catch (error) {
+    res.status(500).send({ message: error.message });
   }
-  if (!token) {
-    res.status(401).send({ message: "You are not logged in.Please log in" });
-  }
-
-  const decoded = promisify(jwt.verify(token, process.env.JWT_SECRET));
-  console.log(decoded, "decoded");
-
-  const this_user = await UserModel.findById({ _id: decoded.userId });
-  if (!this_user)
-    throw CreateError(
-      "The user belonging to this token does no longer exists.",
-      401
-    );
-
-  if (this_user.changedPasswordAfter(decoded.iat)) {
-    return res.status(401).json({
-      message: "User recently changed password! Please log in again.",
-    });
-  }
-
-  // GRANT ACCESS TO PROTECTED ROUTE
-  req.user = this_user;
-  next();
 };
 module.exports = {
   login,
