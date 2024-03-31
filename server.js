@@ -115,11 +115,31 @@ io.on("connection", async (socket) => {
   });
 
   socket.on("get_messages", async (data, callback) => {
-    const { messages } = await OneToOneMessageModel.findById(
+    const all_messages = await OneToOneMessageModel.findById(
       data.conversation_id
     ).select("messages");
-    const all_messages = messages !== null && messages;
-    callback(all_messages);
+
+    const unread_messages_id = [];
+    all_messages.messages.forEach((message, index) => {
+      if (
+        message.message_status !== "read" &&
+        message.from.toString() === data.to.toString()
+      ) {
+        all_messages.messages[index].message_status = "read";
+        unread_messages_id.push(message._id);
+      }
+    });
+
+    await OneToOneMessageModel.updateMany(
+      {
+        _id: data.conversation_id,
+        "messages._id": { $in: unread_messages_id },
+      },
+      { $set: { "messages.$.message_status": "read" } },
+      { new: true }
+    );
+
+    callback(all_messages.messages);
   });
 
   //text message
